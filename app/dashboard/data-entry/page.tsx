@@ -1,6 +1,7 @@
 'use client';
-import { useState } from 'react';
-import { projects, samples, excelTemplate } from '@/utils/data';
+import { useState, useEffect } from 'react';
+import { getProjects, createSample, createBulkSamples, calculateHMPI, getRiskLevel } from '@/utils/supabase';
+import type { Project } from '@/utils/supabase';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,6 +20,24 @@ import {
   Trash2
 } from 'lucide-react';
 
+const excelTemplate = {
+  headers: [
+    "SampleID",
+    "ProjectID", 
+    "District",
+    "City",
+    "Latitude",
+    "Longitude",
+    "Metal",
+    "Concentration",
+    "Date"
+  ],
+  sampleData: [
+    ["GNG-008", "project-id-here", "Varanasi", "Varanasi", "25.3176", "82.9739", "Lead", "0.09", "2025-01-20"],
+    ["YMN-006", "project-id-here", "New Delhi", "Delhi", "28.7041", "77.1025", "Arsenic", "0.05", "2025-02-12"],
+  ]
+};
+
 interface SampleData {
   sampleId: string;
   projectId: string;
@@ -27,15 +46,15 @@ interface SampleData {
   latitude: string;
   longitude: string;
   metal: string;
-  Si: string;
-  Ii: string;
-  Mi: string;
+  concentration: string;
   date: string;
 }
 
 export default function DataEntryPage() {
+  const [projects, setProjects] = useState<Project[]>([]);
   const [uploadedData, setUploadedData] = useState<SampleData[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [newSample, setNewSample] = useState<SampleData>({
     sampleId: '',
     projectId: '',
@@ -44,11 +63,22 @@ export default function DataEntryPage() {
     latitude: '',
     longitude: '',
     metal: '',
-    Si: '',
-    Ii: '',
-    Mi: '',
+    concentration: '',
     date: new Date().toISOString().split('T')[0]
   });
+
+  useEffect(() => {
+    loadProjects();
+  }, []);
+
+  const loadProjects = async () => {
+    try {
+      const projectsData = await getProjects();
+      setProjects(projectsData);
+    } catch (error) {
+      console.error('Error loading projects:', error);
+    }
+  };
 
   const handleDownloadTemplate = () => {
     // Create CSV content
@@ -90,7 +120,7 @@ export default function DataEntryPage() {
         const data: SampleData[] = [];
         for (let i = 1; i < lines.length; i++) {
           const row = lines[i].split(',');
-          if (row.length === headers.length && row[0].trim()) {
+          if (row.length >= 8 && row[0].trim()) {
             data.push({
               sampleId: row[0].trim(),
               projectId: row[1].trim(),
@@ -99,10 +129,8 @@ export default function DataEntryPage() {
               latitude: row[4].trim(),
               longitude: row[5].trim(),
               metal: row[6].trim(),
-              Si: row[7].trim(),
-              Ii: row[8].trim(),
-              Mi: row[9].trim(),
-              date: row[10].trim()
+              concentration: row[7].trim(),
+              date: row[8].trim()
             });
           }
         }
@@ -120,7 +148,7 @@ export default function DataEntryPage() {
 
   const handleAddSample = () => {
     // Validate form
-    const requiredFields = ['sampleId', 'projectId', 'district', 'city', 'latitude', 'longitude', 'metal', 'Si', 'Ii', 'Mi'];
+    const requiredFields = ['sampleId', 'projectId', 'district', 'city', 'latitude', 'longitude', 'metal', 'concentration'];
     const missingFields = requiredFields.filter(field => !newSample[field as keyof SampleData]);
     
     if (missingFields.length > 0) {
@@ -140,23 +168,72 @@ export default function DataEntryPage() {
       latitude: '',
       longitude: '',
       metal: '',
-      Si: '',
-      Ii: '',
-      Mi: '',
+      concentration: '',
       date: new Date().toISOString().split('T')[0]
     });
   };
 
-  const handleSaveData = () => {
+  const handleSaveData = async () => {
     if (uploadedData.length === 0) {
       alert('No data to save. Please add samples or upload a file.');
       return;
     }
 
-    // In real app, this would make an API call to save data
-    console.log('Saving data:', uploadedData);
-    alert(`Successfully saved ${uploadedData.length} sample(s) to the database!`);
-    setUploadedData([]);
+    setIsSaving(true);
+    try {
+      const samplesToSave = uploadedData.map(sample => {
+        const concentration = parseFloat(sample.concentration);
+        // Using standard values for HMPI calculation
+        const Ii = getStandardIi(sample.metal);
+        const Mi = getStandardMi(sample.metal);
+        const hmpiValue = calculateHMPI(concentration, Ii, Mi);
+        const riskLevel = getRiskLevel(hmpiValue);
+
+        return {
+          project_id: sample.projectId,
+          sample_id: sample.sampleId,
+          metal: sample.metal,
+          concentration,
+          date_collected: sample.date,
+          latitude: parseFloat(sample.latitude),
+          longitude: parseFloat(sample.longitude),
+          hmpi_value: hmpiValue,
+          risk_level: riskLevel
+        };
+      });
+
+      await createBulkSamples(samplesToSave);
+      alert(`Successfully saved ${uploadedData.length} sample(s) to the database!`);
+      setUploadedData([]);
+    } catch (error) {
+      console.error('Error saving samples:', error);
+      alert('Error saving samples. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Helper functions for standard values
+  const getStandardIi = (metal: string): number => {
+    const standards: Record<string, number> = {
+      'Lead': 0.01,
+      'Arsenic': 0.01,
+      'Chromium': 0.05,
+      'Mercury': 0.006,
+      'Cadmium': 0.003,
+    };
+    return standards[metal] || 0.01;
+  };
+
+  const getStandardMi = (metal: string): number => {
+    const weights: Record<string, number> = {
+      'Lead': 0.7,
+      'Arsenic': 0.5,
+      'Chromium': 0.4,
+      'Mercury': 0.6,
+      'Cadmium': 0.45,
+    };
+    return weights[metal] || 0.5;
   };
 
   const handleDeleteSample = (index: number) => {
@@ -177,12 +254,8 @@ export default function DataEntryPage() {
     if (isNaN(lng) || lng < -180 || lng > 180) errors.push('Invalid longitude');
     
     // Validate numeric values
-    const Si = parseFloat(sample.Si);
-    const Ii = parseFloat(sample.Ii);
-    const Mi = parseFloat(sample.Mi);
-    if (isNaN(Si) || Si < 0) errors.push('Invalid Si value');
-    if (isNaN(Ii) || Ii <= 0) errors.push('Invalid Ii value');
-    if (isNaN(Mi) || Mi <= 0) errors.push('Invalid Mi value');
+    const concentration = parseFloat(sample.concentration);
+    if (isNaN(concentration) || concentration < 0) errors.push('Invalid concentration value');
     
     return errors;
   };
@@ -358,32 +431,12 @@ export default function DataEntryPage() {
 
             <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="Si">Si (mg/L) *</Label>
+                <Label htmlFor="concentration">Concentration (mg/L) *</Label>
                 <Input
-                  id="Si"
+                  id="concentration"
                   placeholder="0.09"
-                  value={newSample.Si}
-                  onChange={(e) => setNewSample(prev => ({ ...prev, Si: e.target.value }))}
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="Ii">Ii *</Label>
-                <Input
-                  id="Ii"
-                  placeholder="0.3"
-                  value={newSample.Ii}
-                  onChange={(e) => setNewSample(prev => ({ ...prev, Ii: e.target.value }))}
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="Mi">Mi *</Label>
-                <Input
-                  id="Mi"
-                  placeholder="0.7"
-                  value={newSample.Mi}
-                  onChange={(e) => setNewSample(prev => ({ ...prev, Mi: e.target.value }))}
+                  value={newSample.concentration}
+                  onChange={(e) => setNewSample(prev => ({ ...prev, concentration: e.target.value }))}
                 />
               </div>
             </div>
@@ -419,7 +472,7 @@ export default function DataEntryPage() {
               </div>
               <Button onClick={handleSaveData} className="bg-green-600 hover:bg-green-700">
                 <CheckCircle className="h-4 w-4 mr-2" />
-                Save All Data
+                {isSaving ? 'Saving...' : 'Save All Data'}
               </Button>
             </div>
           </CardHeader>
@@ -432,9 +485,7 @@ export default function DataEntryPage() {
                     <th className="text-left p-2">Project</th>
                     <th className="text-left p-2">Location</th>
                     <th className="text-left p-2">Metal</th>
-                    <th className="text-left p-2">Si</th>
-                    <th className="text-left p-2">Ii</th>
-                    <th className="text-left p-2">Mi</th>
+                    <th className="text-left p-2">Concentration</th>
                     <th className="text-left p-2">Status</th>
                     <th className="text-left p-2">Actions</th>
                   </tr>
@@ -447,12 +498,10 @@ export default function DataEntryPage() {
                     return (
                       <tr key={index} className="border-b hover:bg-gray-50">
                         <td className="p-2 font-medium">{sample.sampleId}</td>
-                        <td className="p-2">{project ? project.name.split(' - ')[1] : sample.projectId}</td>
+                        <td className="p-2">{project ? project.name : sample.projectId}</td>
                         <td className="p-2">{sample.district}, {sample.city}</td>
                         <td className="p-2">{sample.metal}</td>
-                        <td className="p-2">{sample.Si}</td>
-                        <td className="p-2">{sample.Ii}</td>
-                        <td className="p-2">{sample.Mi}</td>
+                        <td className="p-2">{sample.concentration}</td>
                         <td className="p-2">
                           {errors.length === 0 ? (
                             <Badge variant="outline" className="text-green-600">Valid</Badge>
@@ -481,35 +530,6 @@ export default function DataEntryPage() {
           </CardContent>
         </Card>
       )}
-
-      {/* Recent Samples */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent Samples</CardTitle>
-          <CardDescription>Last 5 samples added to the system</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {samples.slice(-5).reverse().map((sample) => {
-              const project = projects.find(p => p.id === sample.projectId);
-              return (
-                <div key={sample.id} className="flex items-center justify-between p-3 border rounded-lg">
-                  <div>
-                    <div className="font-medium">{sample.sampleId}</div>
-                    <div className="text-sm text-gray-500">
-                      {project?.name.split(' - ')[1]} • {sample.district}, {sample.city}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm font-medium">{sample.metal}</div>
-                    <div className="text-xs text-gray-500">{sample.date}</div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

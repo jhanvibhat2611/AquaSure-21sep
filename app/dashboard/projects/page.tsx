@@ -1,6 +1,7 @@
 'use client';
-import { useState } from 'react';
-import { projects, samples, alerts, calculateHMPI, getRiskLevel } from '@/utils/data';
+import { useState, useEffect } from 'react';
+import { getProjects, getSamples, getAlerts, createProject } from '@/utils/supabase';
+import type { Project, Sample, Alert } from '@/utils/supabase';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -23,44 +24,88 @@ import {
 interface NewProject {
   name: string;
   description: string;
-  district: string;
-  city: string;
+  location_district: string;
+  location_city: string;
+  location_state: string;
 }
 
 export default function ProjectsPage() {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [samples, setSamples] = useState<Sample[]>([]);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [newProject, setNewProject] = useState<NewProject>({
     name: '',
     description: '',
-    district: '',
-    city: ''
+    location_district: '',
+    location_city: '',
+    location_state: ''
   });
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+    try {
+      const [projectsData, samplesData, alertsData] = await Promise.all([
+        getProjects(),
+        getSamples(),
+        getAlerts()
+      ]);
+      
+      setProjects(projectsData);
+      setSamples(samplesData);
+      setAlerts(alertsData);
+    } catch (error) {
+      console.error('Error loading data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Filter projects based on search term
   const filteredProjects = projects.filter(project =>
     project.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    project.city.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    project.district.toLowerCase().includes(searchTerm.toLowerCase())
+    project.location_city.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    project.location_district.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const handleCreateProject = () => {
-    // In real app, this would make an API call
-    console.log('Creating project:', newProject);
-    setNewProject({ name: '', description: '', district: '', city: '' });
-    setIsDialogOpen(false);
-    // Show success message
+  const handleCreateProject = async () => {
+    setIsCreating(true);
+    try {
+      await createProject(newProject);
+      setNewProject({ 
+        name: '', 
+        description: '', 
+        location_district: '', 
+        location_city: '',
+        location_state: ''
+      });
+      setIsDialogOpen(false);
+      await loadData(); // Reload data
+    } catch (error) {
+      console.error('Error creating project:', error);
+      alert('Error creating project. Please try again.');
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   const getProjectStats = (projectId: string) => {
-    const projectSamples = samples.filter(s => s.projectId === projectId);
-    const projectAlerts = alerts.filter(a => a.projectId === projectId && !a.acknowledged);
+    const projectSamples = samples.filter(s => s.project_id === projectId);
+    const projectAlerts = alerts.filter(a => 
+      projectSamples.some(s => s.id === a.sample_id) && a.status === 'active'
+    );
     const avgHMPI = projectSamples.length > 0 
-      ? projectSamples.reduce((sum, s) => sum + calculateHMPI(s), 0) / projectSamples.length 
+      ? projectSamples.reduce((sum, s) => sum + s.hmpi_value, 0) / projectSamples.length 
       : 0;
     
-    const riskLevels = projectSamples.map(s => getRiskLevel(calculateHMPI(s)).level);
+    const riskLevels = projectSamples.map(s => s.risk_level);
     const highRiskCount = riskLevels.filter(level => level === 'High Risk' || level === 'Very High Risk').length;
 
     return {
@@ -70,6 +115,21 @@ export default function ProjectsPage() {
       highRiskCount
     };
   };
+
+  if (loading) {
+    return (
+      <div className="p-6">
+        <div className="animate-pulse space-y-6">
+          <div className="h-8 bg-gray-200 rounded w-1/4"></div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {[1, 2, 3].map(i => (
+              <div key={i} className="h-64 bg-gray-200 rounded"></div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 space-y-6">
@@ -118,24 +178,34 @@ export default function ProjectsPage() {
               
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="district">District</Label>
+                  <Label htmlFor="location_district">District</Label>
                   <Input
-                    id="district"
+                    id="location_district"
                     placeholder="District name"
-                    value={newProject.district}
-                    onChange={(e) => setNewProject(prev => ({ ...prev, district: e.target.value }))}
+                    value={newProject.location_district}
+                    onChange={(e) => setNewProject(prev => ({ ...prev, location_district: e.target.value }))}
                   />
                 </div>
                 
                 <div className="space-y-2">
-                  <Label htmlFor="city">City/State</Label>
+                  <Label htmlFor="location_city">City</Label>
                   <Input
-                    id="city"
-                    placeholder="City or State"
-                    value={newProject.city}
-                    onChange={(e) => setNewProject(prev => ({ ...prev, city: e.target.value }))}
+                    id="location_city"
+                    placeholder="City name"
+                    value={newProject.location_city}
+                    onChange={(e) => setNewProject(prev => ({ ...prev, location_city: e.target.value }))}
                   />
                 </div>
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="location_state">State</Label>
+                <Input
+                  id="location_state"
+                  placeholder="State name"
+                  value={newProject.location_state}
+                  onChange={(e) => setNewProject(prev => ({ ...prev, location_state: e.target.value }))}
+                />
               </div>
               
               <div className="flex justify-end gap-2 pt-4">
@@ -144,9 +214,9 @@ export default function ProjectsPage() {
                 </Button>
                 <Button 
                   onClick={handleCreateProject}
-                  disabled={!newProject.name || !newProject.district || !newProject.city}
+                  disabled={isCreating || !newProject.name || !newProject.location_district || !newProject.location_city || !newProject.location_state}
                 >
-                  Create Project
+                  {isCreating ? 'Creating...' : 'Create Project'}
                 </Button>
               </div>
             </div>
@@ -188,7 +258,7 @@ export default function ProjectsPage() {
                     <CardTitle className="text-lg line-clamp-2">{project.name}</CardTitle>
                     <CardDescription className="mt-1 flex items-center gap-1">
                       <MapPin className="h-3 w-3" />
-                      {project.district}, {project.city}
+                      {project.location_district}, {project.location_city}
                     </CardDescription>
                   </div>
                   <FolderOpen className="h-5 w-5 text-blue-600 flex-shrink-0 ml-2" />
@@ -231,7 +301,7 @@ export default function ProjectsPage() {
                 <div className="flex items-center justify-between text-xs text-gray-500 pt-2 border-t">
                   <div className="flex items-center gap-1">
                     <Calendar className="h-3 w-3" />
-                    {project.createdAt}
+                    {new Date(project.created_at).toLocaleDateString()}
                   </div>
                   <Badge variant="outline" className="text-xs">Active</Badge>
                 </div>
@@ -282,13 +352,13 @@ export default function ProjectsPage() {
             </div>
             <div className="text-center p-4 bg-amber-50 rounded-lg">
               <div className="text-2xl font-bold text-amber-600">
-                {new Set(samples.map(s => s.district)).size}
+                {new Set(projects.map(p => p.location_district)).size}
               </div>
               <div className="text-sm text-amber-700">Districts Covered</div>
             </div>
             <div className="text-center p-4 bg-red-50 rounded-lg">
               <div className="text-2xl font-bold text-red-600">
-                {alerts.filter(a => !a.acknowledged).length}
+                {alerts.filter(a => a.status === 'active').length}
               </div>
               <div className="text-sm text-red-700">Active Alerts</div>
             </div>

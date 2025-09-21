@@ -1,10 +1,14 @@
 'use client';
-import { createContext, useContext, useState, ReactNode } from 'react';
-import { User, UserRole } from '@/utils/auth';
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { User } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabaseClient';
+import { DatabaseUser, signIn, signOut, signUp, getCurrentUser } from '@/utils/supabase';
 
 interface AuthContextType {
-  user: User | null;
-  login: (role: UserRole, email?: string, password?: string) => Promise<boolean>;
+  user: DatabaseUser | null;
+  loading: boolean;
+  signIn: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string, name: string, role: string) => Promise<void>;
   logout: () => void;
   isAuthenticated: boolean;
 }
@@ -12,54 +16,86 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<DatabaseUser | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const login = async (role: UserRole, email?: string, password?: string): Promise<boolean> => {
-    // For researcher, no authentication required
-    if (role === 'researcher') {
-      setUser({
-        id: '3',
-        name: 'Research User',
-        email: 'research@aquasure.com',
-        role: 'researcher'
-      });
-      return true;
-    }
-
-    // For scientist and policy-maker, simulate authentication
-    if (email && password) {
-      if (role === 'scientist' && email === 'scientist@aquasure.com' && password === 'password') {
-        setUser({
-          id: '1',
-          name: 'Dr. Sarah Johnson',
-          email: 'scientist@aquasure.com',
-          role: 'scientist'
-        });
-        return true;
+  useEffect(() => {
+    // Get initial session
+    const getInitialSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (session?.user) {
+        try {
+          const userData = await getCurrentUser();
+          setUser(userData);
+        } catch (error) {
+          console.error('Error fetching user data:', error);
+        }
       }
       
-      if (role === 'policy-maker' && email === 'policy@aquasure.com' && password === 'password') {
-        setUser({
-          id: '2',
-          name: 'Michael Chen',
-          email: 'policy@aquasure.com',
-          role: 'policy-maker'
-        });
-        return true;
-      }
-    }
+      setLoading(false);
+    };
 
-    return false;
+    getInitialSession();
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (session?.user) {
+          try {
+            const userData = await getCurrentUser();
+            setUser(userData);
+          } catch (error) {
+            console.error('Error fetching user data:', error);
+            setUser(null);
+          }
+        } else {
+          setUser(null);
+        }
+        setLoading(false);
+      }
+    );
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleSignIn = async (email: string, password: string) => {
+    setLoading(true);
+    try {
+      await signIn(email, password);
+    } catch (error) {
+      setLoading(false);
+      throw error;
+    }
   };
 
-  const logout = () => {
-    setUser(null);
+  const handleSignUp = async (email: string, password: string, name: string, role: string) => {
+    setLoading(true);
+    try {
+      await signUp(email, password, name, role);
+    } catch (error) {
+      setLoading(false);
+      throw error;
+    }
+  };
+
+  const logout = async () => {
+    setLoading(true);
+    try {
+      await signOut();
+    } catch (error) {
+      console.error('Error signing out:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <AuthContext.Provider value={{
       user,
-      login,
+      loading,
+      signIn: handleSignIn,
+      signUp: handleSignUp,
       logout,
       isAuthenticated: !!user
     }}>

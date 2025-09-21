@@ -2,7 +2,6 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { rolePermissions } from '@/utils/auth';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
@@ -24,6 +23,37 @@ import {
   Shield
 } from 'lucide-react';
 
+const rolePermissions = {
+  scientist: [
+    'dashboard',
+    'data-entry', 
+    'calculations',
+    'visualization',
+    'projects',
+    'reports',
+    'trends',
+    'comparison',
+    'alerts'
+  ],
+  'policy-maker': [
+    'policies',
+    'projects', 
+    'reports',
+    'trends',
+    'comparison', 
+    'alerts',
+    'visualization'
+  ],
+  researcher: [
+    'visualization',
+    'projects',
+    'reports', 
+    'trends',
+    'comparison',
+    'alerts'
+  ]
+};
+
 interface NavItem {
   key: string;
   label: string;
@@ -36,17 +66,17 @@ export default function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const { user, logout, isAuthenticated } = useAuth();
+  const { user, logout, isAuthenticated, loading } = useAuth();
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
-    if (!isAuthenticated) {
+    if (!loading && !isAuthenticated) {
       router.push('/');
     }
-  }, [isAuthenticated, router]);
+  }, [isAuthenticated, loading, router]);
 
-  if (!user) {
+  if (loading || !user) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-600"></div>
@@ -116,7 +146,7 @@ export default function DashboardLayout({
             <div className="text-sm font-medium text-gray-900">{user.name}</div>
             <div className="text-xs text-gray-500">{user.email}</div>
             <div className="text-xs text-blue-600 font-medium mt-1 capitalize">
-              {user.role.replace('-', ' ')} Access
+              {user.role.replace('-', ' ')}
             </div>
           </div>
 
